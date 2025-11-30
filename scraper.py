@@ -3,9 +3,9 @@ import json
 import os
 import aiofiles
 from datetime import datetime, timezone
-import asyncpraw
-from asyncpraw.models import MoreComments
-from typing import Optional, Dict, Any
+import httpx
+from typing import Optional, Dict, Any, List
+import time
 
 class SubredditScraper:
     def __init__(self, subreddit_name, target_date_str, job_id, logger, update_callback):
@@ -28,43 +28,93 @@ class SubredditScraper:
             "posts": []
         }
         
-        # Initialize Reddit instance
-        self.reddit = asyncpraw.Reddit(
-            client_id=os.getenv("REDDIT_CLIENT_ID", "YOUR_CLIENT_ID"),
-            client_secret=os.getenv("REDDIT_CLIENT_SECRET", "YOUR_CLIENT_SECRET"),
-            user_agent="SubredditScraper/1.0 by /u/YourUsername"
-        )
+        # HTTP client with custom headers to avoid rate limiting
+        self.headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json',
+            'Accept-Language': 'en-US,en;q=0.9',
+        }
         
-        # Cache for author info to reduce API calls
+        # Cache for author info to reduce requests
         self.author_cache = {}
+        
+        # Rate limiting
+        self.last_request_time = 0
+        self.min_request_interval = 1.0  # 1 second between requests
+
+    async def rate_limit(self):
+        """Implement rate limiting to avoid being blocked"""
+        current_time = time.time()
+        time_since_last_request = current_time - self.last_request_time
+        if time_since_last_request < self.min_request_interval:
+            await asyncio.sleep(self.min_request_interval - time_since_last_request)
+        self.last_request_time = time.time()
+
+    async def fetch_json(self, url: str, params: dict = None) -> Optional[dict]:
+        """Fetch JSON data from Reddit"""
+        await self.rate_limit()
+        
+        async with httpx.AsyncClient(headers=self.headers, timeout=30.0) as client:
+            try:
+                response = await client.get(url, params=params)
+                response.raise_for_status()
+                return response.json()
+            except Exception as e:
+                self.logger.error(f"Error fetching {url}: {e}")
+                return None
 
     async def run(self):
         try:
             self.logger.info(f"Starting scrape for r/{self.subreddit_name} until {self.target_date.date()}")
-            await self.update_callback("Starting scrape...", "info")
+            await self.update_callback("Starting custom scraper (no API required)...", "info")
             
-            subreddit = await self.reddit.subreddit(self.subreddit_name)
+            # Reddit's JSON endpoint for new posts
+            base_url = f"https://www.reddit.com/r/{self.subreddit_name}/new.json"
+            after = None
+            reached_target = False
             
-            # Reddit API has pagination limits. We'll iterate through as many posts as possible.
-            # For 1M+ posts, this would require multiple strategies (time-based search, etc.)
-            # This implementation handles the standard API approach efficiently.
-            
-            async for post in subreddit.new(limit=None):
-                if not self.is_running:
-                    self.logger.info("Scraping stopped by user")
+            while self.is_running and not reached_target:
+                # Fetch posts
+                params = {'limit': 100}
+                if after:
+                    params['after'] = after
+                
+                data = await self.fetch_json(base_url, params)
+                
+                if not data or 'data' not in data:
+                    self.logger.warning("No more data available")
                     break
                 
-                post_date = datetime.fromtimestamp(post.created_utc, tz=timezone.utc)
+                posts = data['data']['children']
+                after = data['data'].get('after')
                 
-                if post_date < self.target_date:
-                    self.logger.info(f"Reached target date: {post_date.date()}")
+                if not posts:
+                    self.logger.info("No more posts found")
                     break
                 
-                await self.process_post(post)
+                for post_data in posts:
+                    if not self.is_running:
+                        break
+                    
+                    post = post_data['data']
+                    post_date = datetime.fromtimestamp(post['created_utc'], tz=timezone.utc)
+                    
+                    if post_date < self.target_date:
+                        self.logger.info(f"Reached target date: {post_date.date()}")
+                        reached_target = True
+                        break
+                    
+                    await self.process_post(post)
+                    
+                    # Save progress every 10 posts
+                    if self.posts_scraped % 10 == 0:
+                        await self.save_partial()
                 
-                # Save progress every 10 posts
-                if self.posts_scraped % 10 == 0:
-                    await self.save_partial()
+                if not after:
+                    self.logger.info("Reached end of available posts")
+                    break
+                
+                await self.update_callback(f"Fetching more posts... (after: {after[:20]}...)", "info")
                     
         except Exception as e:
             self.logger.error(f"Scraping error: {str(e)}")
@@ -72,55 +122,68 @@ class SubredditScraper:
             self.errors += 1
         finally:
             await self.save_final()
-            await self.reddit.close()
             self.logger.info("Scraping finished.")
 
-    async def process_post(self, post):
+    async def process_post(self, post: dict):
         try:
-            # Fetch author info
-            author_info = await self.get_author_info(post.author)
+            # Extract post data
+            post_id = post.get('id', '')
+            permalink = post.get('permalink', '')
+            
+            # Get author info
+            author_name = post.get('author', '[deleted]')
+            author_info = await self.get_author_info(author_name)
             
             post_data = {
-                "post_id": post.id,
-                "url": f"https://reddit.com{post.permalink}",
-                "title": post.title,
-                "body": post.selftext,
-                "author": str(post.author) if post.author else "[deleted]",
-                "created_utc": datetime.fromtimestamp(post.created_utc, tz=timezone.utc).isoformat(),
-                "subreddit": post.subreddit.display_name,
-                "flair": post.link_flair_text,
-                "score": post.score,
-                "upvote_ratio": post.upvote_ratio,
-                "num_comments": post.num_comments,
-                "awards": post.total_awards_received if hasattr(post, 'total_awards_received') else 0,
-                "is_nsfw": post.over_18,
-                "num_shares": 0,  # Not directly available via API
-                "num_saves": 0,   # Not directly available via API
+                "post_id": post_id,
+                "url": f"https://reddit.com{permalink}",
+                "title": post.get('title', ''),
+                "body": post.get('selftext', ''),
+                "author": author_name,
+                "created_utc": datetime.fromtimestamp(post.get('created_utc', 0), tz=timezone.utc).isoformat(),
+                "subreddit": post.get('subreddit', self.subreddit_name),
+                "flair": post.get('link_flair_text'),
+                "score": post.get('score', 0),
+                "upvote_ratio": post.get('upvote_ratio', 0.0),
+                "num_comments": post.get('num_comments', 0),
+                "awards": post.get('total_awards_received', 0),
+                "is_nsfw": post.get('over_18', False),
+                "num_shares": 0,  # Not available in JSON
+                "num_saves": 0,   # Not available in JSON
                 "author_info": author_info,
                 "comments": [],
                 "comments_scraped_count": 0
             }
             
             # Fetch comments
-            comments = await self.fetch_comments(post)
-            post_data["comments"] = comments
-            post_data["comments_scraped_count"] = len(comments)
+            if post.get('num_comments', 0) > 0:
+                comments = await self.fetch_comments(post_id, permalink)
+                post_data["comments"] = comments
+                post_data["comments_scraped_count"] = len(comments)
             
             self.scraped_data["posts"].append(post_data)
             self.posts_scraped += 1
-            self.comments_scraped += len(comments)
+            self.comments_scraped += post_data["comments_scraped_count"]
             
-            await self.update_callback(f"Scraped: {post.title[:50]}...", "info")
-            await self.update_callback({"posts": self.posts_scraped, "comments": self.comments_scraped, "errors": self.errors}, "stats")
+            await self.update_callback(f"Scraped: {post_data['title'][:50]}...", "info")
+            await self.update_callback({
+                "posts": self.posts_scraped, 
+                "comments": self.comments_scraped, 
+                "errors": self.errors
+            }, "stats")
             
         except Exception as e:
-            self.logger.error(f"Error processing post {post.id}: {e}")
+            self.logger.error(f"Error processing post: {e}")
             self.errors += 1
-            await self.update_callback({"posts": self.posts_scraped, "comments": self.comments_scraped, "errors": self.errors}, "stats")
+            await self.update_callback({
+                "posts": self.posts_scraped, 
+                "comments": self.comments_scraped, 
+                "errors": self.errors
+            }, "stats")
 
-    async def get_author_info(self, author) -> Dict[str, Any]:
-        """Fetch author information with caching"""
-        if author is None:
+    async def get_author_info(self, author_name: str) -> Dict[str, Any]:
+        """Fetch author information from Reddit's JSON endpoint"""
+        if author_name == '[deleted]' or not author_name:
             return {
                 "username": "[deleted]",
                 "account_created_utc": None,
@@ -132,91 +195,128 @@ class SubredditScraper:
                 "subreddits_participated_in": []
             }
         
-        username = str(author)
-        
         # Check cache
-        if username in self.author_cache:
-            return self.author_cache[username]
+        if author_name in self.author_cache:
+            return self.author_cache[author_name]
         
         try:
-            # Fetch author details
-            redditor = await self.reddit.redditor(username)
+            url = f"https://www.reddit.com/user/{author_name}/about.json"
+            data = await self.fetch_json(url)
             
-            author_data = {
-                "username": username,
-                "account_created_utc": datetime.fromtimestamp(redditor.created_utc, tz=timezone.utc).isoformat(),
-                "post_karma": redditor.link_karma,
-                "comment_karma": redditor.comment_karma,
-                "total_karma": redditor.link_karma + redditor.comment_karma,
-                "num_posts": 0,  # Would require iterating through submissions
-                "num_comments": 0,  # Would require iterating through comments
-                "subreddits_participated_in": []  # Would require complex analysis
-            }
-            
-            # Cache the result
-            self.author_cache[username] = author_data
-            return author_data
+            if data and 'data' in data:
+                user = data['data']
+                author_data = {
+                    "username": author_name,
+                    "account_created_utc": datetime.fromtimestamp(user.get('created_utc', 0), tz=timezone.utc).isoformat(),
+                    "post_karma": user.get('link_karma', 0),
+                    "comment_karma": user.get('comment_karma', 0),
+                    "total_karma": user.get('total_karma', user.get('link_karma', 0) + user.get('comment_karma', 0)),
+                    "num_posts": 0,  # Would require additional requests
+                    "num_comments": 0,  # Would require additional requests
+                    "subreddits_participated_in": []  # Would require additional requests
+                }
+                
+                # Cache the result
+                self.author_cache[author_name] = author_data
+                return author_data
             
         except Exception as e:
-            self.logger.warning(f"Could not fetch author info for {username}: {e}")
-            return {
-                "username": username,
-                "account_created_utc": None,
-                "post_karma": 0,
-                "comment_karma": 0,
-                "total_karma": 0,
-                "num_posts": 0,
-                "num_comments": 0,
-                "subreddits_participated_in": []
-            }
+            self.logger.warning(f"Could not fetch author info for {author_name}: {e}")
+        
+        # Return default if fetch failed
+        default_data = {
+            "username": author_name,
+            "account_created_utc": None,
+            "post_karma": 0,
+            "comment_karma": 0,
+            "total_karma": 0,
+            "num_posts": 0,
+            "num_comments": 0,
+            "subreddits_participated_in": []
+        }
+        self.author_cache[author_name] = default_data
+        return default_data
 
-    async def fetch_comments(self, post):
-        """Fetch all comments from a post"""
+    async def fetch_comments(self, post_id: str, permalink: str) -> List[Dict]:
+        """Fetch all comments for a post"""
         comments_data = []
         
         try:
-            # Replace MoreComments objects (limit to avoid excessive API calls)
-            # For production with 1M posts, you might want to limit this further
-            await post.comments.replace_more(limit=5)
+            url = f"https://www.reddit.com{permalink}.json"
+            data = await self.fetch_json(url, params={'limit': 500})
             
-            # Recursively process all comments
-            for comment in post.comments.list():
-                if isinstance(comment, MoreComments):
-                    continue
+            if not data or len(data) < 2:
+                return comments_data
+            
+            # Comments are in the second element
+            comments_listing = data[1]['data']['children']
+            
+            for comment_item in comments_listing:
+                if comment_item['kind'] == 'more':
+                    continue  # Skip "load more comments" items
                 
-                comment_data = await self.process_comment(comment, post.id)
+                comment = comment_item['data']
+                comment_data = await self.process_comment(comment)
                 if comment_data:
                     comments_data.append(comment_data)
                     
+                    # Process replies recursively
+                    if 'replies' in comment and comment['replies']:
+                        replies = await self.process_replies(comment['replies'])
+                        comments_data.extend(replies)
+                        
         except Exception as e:
-            self.logger.error(f"Error fetching comments for post {post.id}: {e}")
+            self.logger.error(f"Error fetching comments for post {post_id}: {e}")
         
         return comments_data
 
-    async def process_comment(self, comment, post_id):
+    async def process_replies(self, replies_data) -> List[Dict]:
+        """Process nested comment replies"""
+        replies = []
+        
+        if isinstance(replies_data, dict) and 'data' in replies_data:
+            children = replies_data['data'].get('children', [])
+            
+            for reply_item in children:
+                if reply_item['kind'] == 'more':
+                    continue
+                
+                reply = reply_item['data']
+                reply_data = await self.process_comment(reply)
+                if reply_data:
+                    replies.append(reply_data)
+                    
+                    # Process nested replies
+                    if 'replies' in reply and reply['replies']:
+                        nested_replies = await self.process_replies(reply['replies'])
+                        replies.extend(nested_replies)
+        
+        return replies
+
+    async def process_comment(self, comment: dict) -> Optional[Dict]:
         """Process a single comment"""
         try:
-            # Get author info
-            author_info = await self.get_author_info(comment.author)
+            author_name = comment.get('author', '[deleted]')
+            author_info = await self.get_author_info(author_name)
             
-            # Determine depth (0 for top-level)
+            # Calculate depth based on parent
+            parent_id = comment.get('parent_id', '')
             depth = 0
-            parent = comment.parent_id
-            if not parent.startswith("t3_"):  # t3_ is post, t1_ is comment
-                depth = 1  # Simplified depth calculation
+            if parent_id and not parent_id.startswith('t3_'):  # t3_ is post, t1_ is comment
+                depth = comment.get('depth', 0)
             
             return {
-                "comment_id": comment.id,
-                "parent_id": comment.parent_id,
-                "author": str(comment.author) if comment.author else "[deleted]",
-                "body": comment.body,
-                "created_utc": datetime.fromtimestamp(comment.created_utc, tz=timezone.utc).isoformat(),
-                "score": comment.score,
+                "comment_id": comment.get('id', ''),
+                "parent_id": parent_id,
+                "author": author_name,
+                "body": comment.get('body', ''),
+                "created_utc": datetime.fromtimestamp(comment.get('created_utc', 0), tz=timezone.utc).isoformat(),
+                "score": comment.get('score', 0),
                 "depth": depth,
                 "author_info": author_info
             }
         except Exception as e:
-            self.logger.error(f"Error processing comment {comment.id}: {e}")
+            self.logger.error(f"Error processing comment: {e}")
             return None
 
     async def save_partial(self):
