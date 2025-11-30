@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,8 +8,9 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="/static/style.css">
 </head>
+
 <body>
     <div class="background-glow"></div>
     <div class="container">
@@ -22,9 +24,10 @@
                 <form id="scrapeForm">
                     <div class="input-group">
                         <label for="subreddit">Subreddit URL or Name</label>
-                        <input type="text" id="subreddit" name="subreddit" placeholder="e.g. r/learnpython or https://reddit.com/r/..." required>
+                        <input type="text" id="subreddit" name="subreddit"
+                            placeholder="e.g. r/learnpython or https://reddit.com/r/..." required>
                     </div>
-                    
+
                     <div class="input-group">
                         <label for="targetDate">Target Date (Oldest Post)</label>
                         <input type="date" id="targetDate" name="targetDate" required>
@@ -46,7 +49,7 @@
                     <h2>Live Status</h2>
                     <span id="statusIndicator" class="badge idle">Idle</span>
                 </div>
-                
+
                 <div class="stats-grid">
                     <div class="stat-card">
                         <span class="stat-label">Posts Scraped</span>
@@ -78,6 +81,7 @@
             </section>
         </main>
     </div>
-    <script src="script.js"></script>
+    <script src="/static/script.js"></script>
 </body>
+
 </html>
