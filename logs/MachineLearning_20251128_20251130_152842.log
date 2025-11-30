@@ -1,6 +1,0 @@
-2025-11-30 15:28:42,534 - INFO - Starting scrape for r/MachineLearning until 2025-11-28
-2025-11-30 15:28:43,290 - ERROR - Error fetching https://www.reddit.com/r/MachineLearning/new.json: Client error '429 Too Many Requests' for url 'https://www.reddit.com/r/MachineLearning/new.json?limit=100'
-For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/429
-2025-11-30 15:28:43,292 - WARNING - No more data available
-2025-11-30 15:28:43,297 - INFO - Saved final data to data/MachineLearning_20251128_20251130_152843.json
-2025-11-30 15:28:43,298 - INFO - Scraping finished.
