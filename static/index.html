@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Subreddit Scraper</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="background-glow"></div>
+    <div class="container">
+        <header>
+            <h1>Subreddit Scraper</h1>
+            <p class="subtitle">Advanced Data Collection Tool</p>
+        </header>
+
+        <main>
+            <section class="control-panel glass-panel">
+                <form id="scrapeForm">
+                    <div class="input-group">
+                        <label for="subreddit">Subreddit URL or Name</label>
+                        <input type="text" id="subreddit" name="subreddit" placeholder="e.g. r/learnpython or https://reddit.com/r/..." required>
+                    </div>
+                    
+                    <div class="input-group">
+                        <label for="targetDate">Target Date (Oldest Post)</label>
+                        <input type="date" id="targetDate" name="targetDate" required>
+                    </div>
+
+                    <div class="actions">
+                        <button type="submit" id="startBtn" class="btn primary">
+                            <span class="icon">▶</span> Start Scraping
+                        </button>
+                        <button type="button" id="stopBtn" class="btn danger" disabled>
+                            <span class="icon">⏹</span> Stop
+                        </button>
+                    </div>
+                </form>
+            </section>
+
+            <section class="status-panel glass-panel">
+                <div class="status-header">
+                    <h2>Live Status</h2>
+                    <span id="statusIndicator" class="badge idle">Idle</span>
+                </div>
+                
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <span class="stat-label">Posts Scraped</span>
+                        <span class="stat-value" id="postsCount">0</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-label">Comments Scraped</span>
+                        <span class="stat-value" id="commentsCount">0</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-label">Errors</span>
+                        <span class="stat-value" id="errorCount">0</span>
+                    </div>
+                    <div class="stat-card">
+                        <span class="stat-label">Elapsed Time</span>
+                        <span class="stat-value" id="elapsedTime">00:00:00</span>
+                    </div>
+                </div>
+
+                <div class="logs-container">
+                    <div class="logs-header">
+                        <h3>System Logs</h3>
+                        <button id="clearLogs" class="btn-text">Clear</button>
+                    </div>
+                    <div id="logOutput" class="log-output">
+                        <div class="log-entry system">System ready. Waiting for input...</div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>

@@ -1,0 +1,69 @@
+{
+    "scraped_at": "2025-11-29T14:55:00.000000",
+    "subreddit": "learnpython",
+    "date_range": {
+        "start": "2024-01-01",
+        "end": "2024-12-31"
+    },
+    "posts": [
+        {
+            "post_id": "t3_ab1111",
+            "url": "https://reddit.com/r/learnpython/comments/ab1111/what_should_i_learn_next/",
+            "title": "Beginner in Python – what should I learn next?",
+            "body": "Hi everyone, I just finished building a few simple RPG-style games in Python. I'm not sure what to try next. Any ideas?",
+            "author": "StarterDev001",
+            "created_utc": "2025-06-12T10:20:31.000000+0000",
+            "subreddit": "learnpython",
+            "flair": "Beginner",
+            "score": 52,
+            "upvote_ratio": 0.93,
+            "num_comments": 8,
+            "awards": 0,
+            "is_nsfw": false,
+            "num_shares": 1,
+            "num_saves": 4,
+            "author_info": {
+                "username": "StarterDev001",
+                "account_created_utc": "2023-08-01T14:00:00.000000+0000",
+                "post_karma": 210,
+                "comment_karma": 87,
+                "total_karma": 297,
+                "num_posts": 12,
+                "num_comments": 55,
+                "subreddits_participated_in": [
+                    "learnpython",
+                    "coding",
+                    "programming"
+                ]
+            },
+            "comments": [
+                {
+                    "comment_id": "t1_cmt111",
+                    "parent_id": "t3_ab1111",
+                    "author": "DevTipsGuy",
+                    "body": "Try building a small web app using Flask. It's great for beginners and teaches routing and APIs.",
+                    "created_utc": "2025-06-12T10:25:00.000000+0000",
+                    "score": 16,
+                    "depth": 0,
+                    "author_info": {
+                        "username": "DevTipsGuy",
+                        "account_created_utc": "2021-04-11T08:34:00.000000+0000",
+                        "post_karma": 1840,
+                        "comment_karma": 2901,
+                        "total_karma": 4741,
+                        "num_posts": 82,
+                        "num_comments": 542,
+                        "subreddits_participated_in": [
+                            "learnpython",
+                            "webdev",
+                            "datascience"
+                        ]
+                    }
+                },
+                // same way others comments from same post
+            ],
+            "comments_scraped_count": 3
+        },
+        // same way others post from same subreddit
+    ]
+}
