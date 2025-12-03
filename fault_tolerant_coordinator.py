@@ -107,40 +107,47 @@ class FaultTolerantCoordinator:
             self.logger.error(f"[Recovery] Error loading checkpoint for worker {worker_id}: {e}")
             return None
     
-    async def fetch_json_with_retry(self, client: httpx.AsyncClient, url: str, params: dict = None, retries: int = 3) -> Optional[dict]:
-        """Fetch JSON data with exponential backoff for 429 errors"""
-        backoff = 2.0
+    async def fetch_json_with_retry(self, client: httpx.AsyncClient, url: str, params: dict = None, retries: int = 5) -> Optional[dict]:
+        """Fetch JSON data with detailed logging and exponential backoff"""
+        backoff = 5.0
         
         for i in range(retries + 1):
             try:
+                self.logger.debug(f"Requesting: {url} | Params: {params} | Attempt: {i+1}/{retries+1}")
                 response = await client.get(url, params=params)
                 
-                if response.status_code == 429:
+                # Log rate limit headers if present
+                remaining = response.headers.get('x-ratelimit-remaining')
+                reset = response.headers.get('x-ratelimit-reset')
+                if remaining:
+                    self.logger.debug(f"Rate Limit: {remaining} remaining, reset in {reset}s")
+
+                if response.status_code == 200:
+                    self.logger.info(f"Success: {url} | Status: 200 | Size: {len(response.content)} bytes")
+                    return response.json()
+                
+                elif response.status_code == 429:
+                    wait_time = backoff * (2 ** i)
+                    self.logger.warning(f"Rate Limited (429): {url} | Waiting {wait_time}s")
+                    await self.update_callback(f"Rate limited (429). Waiting {wait_time}s...", "warning")
                     if i < retries:
-                        wait_time = backoff * (2 ** i)
-                        self.logger.warning(f"Rate limited (429). Waiting {wait_time}s before retry {i+1}/{retries}...")
                         await asyncio.sleep(wait_time)
                         continue
                     else:
-                        self.logger.error(f"Max retries reached for {url}")
+                        self.logger.error(f"Max retries exhausted for {url}")
                         return None
-                        
-                response.raise_for_status()
-                return response.json()
                 
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code == 429:
+                else:
+                    self.logger.error(f"HTTP Error: {url} | Status: {response.status_code} | Body: {response.text[:200]}")
                     if i < retries:
-                        wait_time = backoff * (2 ** i)
-                        self.logger.warning(f"Rate limited (429). Waiting {wait_time}s before retry {i+1}/{retries}...")
-                        await asyncio.sleep(wait_time)
+                        await asyncio.sleep(2)
                         continue
-                self.logger.error(f"HTTP error fetching {url}: {e}")
-                return None
+                    return None
+
             except Exception as e:
-                self.logger.error(f"Error fetching {url}: {e}")
+                self.logger.error(f"Exception fetching {url}: {str(e)}")
                 if i < retries:
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(2)
                     continue
                 return None
         return None
