@@ -23,12 +23,14 @@ active_jobs: Dict[str, "ScraperJob"] = {}
 class ScrapeRequest(BaseModel):
     subreddit: str
     target_date: str
+    num_workers: int = 1
 
 class ScraperJob:
-    def __init__(self, job_id, subreddit, target_date):
+    def __init__(self, job_id, subreddit, target_date, num_workers=1):
         self.job_id = job_id
         self.subreddit = subreddit
         self.target_date = target_date
+        self.num_workers = num_workers
         self.is_running = True
         self.queue = asyncio.Queue()
         self.scraper = None  # Will be set when scraper starts
@@ -40,9 +42,9 @@ class ScraperJob:
             "level": level
         }))
 
-    async def update_stats(self, stats):
+    async def update_stats(self, stats, type="stats"):
         await self.queue.put(json.dumps({
-            "type": "stats",
+            "type": type,
             "stats": stats
         }))
 
@@ -73,7 +75,7 @@ async def start_scrape(request: ScrapeRequest):
     elif subreddit.startswith("r/"):
         subreddit = subreddit[2:]
     
-    job = ScraperJob(job_id, subreddit, request.target_date)
+    job = ScraperJob(job_id, subreddit, request.target_date, request.num_workers)
     active_jobs[job_id] = job
     
     # Start the scraping task in background
@@ -116,6 +118,7 @@ async def stream_logs(job_id: str):
 # Real scraping task
 async def run_scrape_task(job: ScraperJob):
     from scraper import SubredditScraper
+    from fault_tolerant_coordinator import FaultTolerantCoordinator
     from logger import setup_logger
     
     # Setup logger
@@ -123,23 +126,39 @@ async def run_scrape_task(job: ScraperJob):
     logger, log_file = setup_logger(session_name)
     
     # Callback to send updates to the UI
-    async def update_callback(message, level="info"):
-        if isinstance(message, dict):
+    async def update_callback(message, type="log"):
+        if type == "stats" or type == "workers_stats":
             # Stats update
-            await job.update_stats(message)
+            await job.update_stats(message, type)
         else:
-            # Log message
-            await job.add_log(message, level)
+            # Log message (default type="log" or "info"/"error" etc mapped to level)
+            # If message is string, treat type as level
+            if isinstance(message, str):
+                await job.add_log(message, level=type)
+            else:
+                # Should not happen often, but fallback
+                await job.update_stats(message, type)
     
     try:
-        # Initialize and run scraper
-        scraper = SubredditScraper(
-            subreddit_name=job.subreddit,
-            target_date_str=job.target_date,
-            job_id=job.job_id,
-            logger=logger,
-            update_callback=update_callback
-        )
+        if job.num_workers > 1:
+            # Distributed mode
+            scraper = FaultTolerantCoordinator(
+                subreddit=job.subreddit,
+                target_date_str=job.target_date,
+                job_id=job.job_id,
+                logger=logger,
+                update_callback=update_callback,
+                num_workers=job.num_workers
+            )
+        else:
+            # Single worker mode
+            scraper = SubredditScraper(
+                subreddit_name=job.subreddit,
+                target_date_str=job.target_date,
+                job_id=job.job_id,
+                logger=logger,
+                update_callback=update_callback
+            )
         
         # Store scraper reference in job for stop functionality
         job.scraper = scraper

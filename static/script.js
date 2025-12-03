@@ -3,19 +3,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const startBtn = document.getElementById('startBtn');
     const stopBtn = document.getElementById('stopBtn');
     const statusIndicator = document.getElementById('statusIndicator');
-    const logOutput = document.getElementById('logOutput');
-    const clearLogsBtn = document.getElementById('clearLogs');
-    
-    // Stats elements
     const postsCountEl = document.getElementById('postsCount');
     const commentsCountEl = document.getElementById('commentsCount');
     const errorCountEl = document.getElementById('errorCount');
     const elapsedTimeEl = document.getElementById('elapsedTime');
+    const logOutput = document.getElementById('logOutput');
+    const clearLogsBtn = document.getElementById('clearLogs');
+    const workersPanel = document.getElementById('workers-panel');
+    const workersGrid = document.getElementById('workers-grid');
+    const activeWorkersCount = document.getElementById('active-workers-count');
 
-    let isScraping = false;
-    let startTime;
-    let timerInterval;
-    let eventSource;
+    let eventSource = null;
+    let startTime = null;
+    let timerInterval = null;
 
     // Set default date to 1 year ago
     const today = new Date();
@@ -24,130 +24,178 @@ document.addEventListener('DOMContentLoaded', () => {
 
     form.addEventListener('submit', async (e) => {
         e.preventDefault();
-        if (isScraping) return;
-
+        
         const subreddit = document.getElementById('subreddit').value;
         const targetDate = document.getElementById('targetDate').value;
+        const numWorkers = parseInt(document.getElementById('numWorkers').value);
 
-        startScraping(subreddit, targetDate);
-    });
+        if (!subreddit || !targetDate) {
+            alert('Please fill in all fields');
+            return;
+        }
 
-    stopBtn.addEventListener('click', () => {
-        if (!isScraping) return;
-        stopScraping();
-    });
-
-    clearLogsBtn.addEventListener('click', () => {
-        logOutput.innerHTML = '';
-        addLog('Logs cleared.', 'system');
-    });
-
-    async function startScraping(subreddit, targetDate) {
-        isScraping = true;
-        updateUIState(true);
+        // Reset UI
         resetStats();
-        startTimer();
-        addLog(`Starting scrape for ${subreddit} until ${targetDate}...`, 'info');
+        log('Starting scrape job...', 'system');
+        setRunningState(true);
+        
+        // Show/hide workers panel based on mode
+        if (numWorkers > 1) {
+            workersPanel.style.display = 'block';
+            workersGrid.innerHTML = ''; // Clear previous workers
+            // Initialize worker cards
+            for (let i = 0; i < numWorkers; i++) {
+                updateWorkerCard(i, { status: 'idle', items_processed: 0 });
+            }
+        } else {
+            workersPanel.style.display = 'none';
+        }
 
         try {
-            // Start the scraping process via API
             const response = await fetch('/api/scrape', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ subreddit, target_date: targetDate }),
+                body: JSON.stringify({ 
+                    subreddit, 
+                    target_date: targetDate,
+                    num_workers: numWorkers
+                }),
             });
 
-            if (!response.ok) {
-                throw new Error(`Failed to start: ${response.statusText}`);
-            }
-
             const data = await response.json();
-            addLog(`Scraping job started. ID: ${data.job_id}`, 'success');
             
-            // Connect to event stream for logs and updates
-            connectToEventStream(data.job_id);
-
+            if (data.job_id) {
+                log(`Job started with ID: ${data.job_id}`, 'success');
+                if (numWorkers > 1) {
+                    log(`Running in distributed mode with ${numWorkers} workers`, 'info');
+                }
+                connectEventSource(data.job_id);
+                startTimer();
+            } else {
+                throw new Error('No job ID returned');
+            }
         } catch (error) {
-            addLog(`Error: ${error.message}`, 'error');
-            stopScraping(false); // Stop but keep UI in error state if needed, or just reset
+            log(`Error starting job: ${error.message}`, 'error');
+            setRunningState(false);
         }
-    }
+    });
 
-    async function stopScraping(notifyServer = true) {
-        isScraping = false;
-        stopTimer();
-        updateUIState(false);
-        
+    stopBtn.addEventListener('click', async () => {
+        try {
+            await fetch('/api/stop', { method: 'POST' });
+            log('Stop signal sent...', 'warning');
+            stopBtn.disabled = true;
+        } catch (error) {
+            log(`Error stopping job: ${error.message}`, 'error');
+        }
+    });
+
+    clearLogsBtn.addEventListener('click', () => {
+        logOutput.innerHTML = '';
+    });
+
+    function connectEventSource(jobId) {
         if (eventSource) {
             eventSource.close();
-            eventSource = null;
         }
-
-        if (notifyServer) {
-            try {
-                await fetch('/api/stop', { method: 'POST' });
-                addLog('Scraping stopped by user.', 'warning');
-            } catch (error) {
-                addLog(`Error stopping: ${error.message}`, 'error');
-            }
-        }
-    }
-
-    function connectToEventStream(jobId) {
-        // Close existing connection if any
-        if (eventSource) eventSource.close();
 
         eventSource = new EventSource(`/api/stream/${jobId}`);
 
         eventSource.onmessage = (event) => {
             const data = JSON.parse(event.data);
-            
+
             if (data.type === 'log') {
-                addLog(data.message, data.level);
+                log(data.message, data.level);
             } else if (data.type === 'stats') {
                 updateStats(data.stats);
+            } else if (data.type === 'workers_stats') {
+                updateWorkersGrid(data.stats);
             } else if (data.type === 'complete') {
-                addLog('Scraping completed successfully!', 'success');
-                stopScraping(false);
-                statusIndicator.textContent = 'Completed';
-                statusIndicator.className = 'badge completed';
+                log('Scraping completed successfully!', 'success');
+                stopScraping();
             } else if (data.type === 'error') {
-                addLog(`Scraper Error: ${data.message}`, 'error');
-                stopScraping(false);
-                statusIndicator.textContent = 'Error';
-                statusIndicator.className = 'badge error';
+                log(`Error: ${data.message}`, 'error');
+                stopScraping();
             }
         };
 
         eventSource.onerror = () => {
-            addLog('Lost connection to server.', 'error');
-            eventSource.close();
-            // Optional: retry logic
+            log('Connection to server lost.', 'error');
+            stopScraping();
         };
     }
 
-    function updateUIState(running) {
+    function updateWorkersGrid(stats) {
+        // Update active count
+        const workingCount = Object.values(stats).filter(w => w.status === 'working').length;
+        activeWorkersCount.textContent = `${workingCount} Active`;
+        
+        // Update each worker card
+        Object.entries(stats).forEach(([workerId, workerState]) => {
+            updateWorkerCard(workerId, workerState);
+        });
+    }
+
+    function updateWorkerCard(workerId, state) {
+        let card = document.getElementById(`worker-${workerId}`);
+        
+        if (!card) {
+            card = document.createElement('div');
+            card.id = `worker-${workerId}`;
+            card.className = 'worker-card';
+            workersGrid.appendChild(card);
+        }
+        
+        // Update classes based on status
+        // Handle enum values which might be uppercase or lowercase
+        const status = (state.status || 'idle').toLowerCase();
+        card.className = `worker-card ${status}`;
+        
+        const itemsProcessed = state.items_processed || 0;
+        const itemsFailed = state.items_failed || 0;
+        
+        card.innerHTML = `
+            <div class="worker-header">
+                <span>Worker ${workerId}</span>
+                <span class="worker-status ${status}">${status}</span>
+            </div>
+            <div class="worker-info">
+                ${itemsProcessed} items
+            </div>
+            <div class="worker-progress">
+                ${itemsFailed > 0 ? `${itemsFailed} failed` : ''}
+            </div>
+        `;
+    }
+
+    function setRunningState(running) {
         startBtn.disabled = running;
         stopBtn.disabled = !running;
         document.getElementById('subreddit').disabled = running;
         document.getElementById('targetDate').disabled = running;
+        document.getElementById('numWorkers').disabled = running;
         
         if (running) {
             statusIndicator.textContent = 'Running';
             statusIndicator.className = 'badge running';
         } else {
-            // If explicitly stopped, we might want to show Idle or Stopped. 
-            // If completed, it's handled in onmessage.
-            if (statusIndicator.textContent === 'Running') {
-                statusIndicator.textContent = 'Idle';
-                statusIndicator.className = 'badge idle';
-            }
+            statusIndicator.textContent = 'Idle';
+            statusIndicator.className = 'badge idle';
         }
     }
 
-    function addLog(message, level = 'info') {
+    function stopScraping() {
+        stopTimer();
+        setRunningState(false);
+        if (eventSource) {
+            eventSource.close();
+            eventSource = null;
+        }
+    }
+
+    function log(message, level = 'info') {
         const entry = document.createElement('div');
         entry.className = `log-entry ${level}`;
         const time = new Date().toLocaleTimeString();

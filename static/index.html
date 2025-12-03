@@ -33,6 +33,11 @@
                         <input type="date" id="targetDate" name="targetDate" required>
                     </div>
 
+                    <div class="input-group">
+                        <label for="numWorkers">Number of Workers 1 = normal or (10-25) = distributed</label>
+                        <input type="number" id="numWorkers" name="numWorkers" min="1" max="25" value="1" required>
+                    </div>
+
                     <div class="actions">
                         <button type="submit" id="startBtn" class="btn primary">
                             <span class="icon">▶</span> Start Scraping
@@ -42,6 +47,16 @@
                         </button>
                     </div>
                 </form>
+            </section>
+
+            <section class="glass-panel" id="workers-panel" style="display: none;">
+                <div class="status-header">
+                    <h2>Workers Status</h2>
+                    <span class="badge running" id="active-workers-count">0 Active</span>
+                </div>
+                <div class="workers-grid" id="workers-grid">
+                    <!-- Worker cards will be inserted here -->
+                </div>
             </section>
 
             <section class="status-panel glass-panel">

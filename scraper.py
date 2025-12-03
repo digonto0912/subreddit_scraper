@@ -50,18 +50,48 @@ class SubredditScraper:
             await asyncio.sleep(self.min_request_interval - time_since_last_request)
         self.last_request_time = time.time()
 
-    async def fetch_json(self, url: str, params: dict = None) -> Optional[dict]:
-        """Fetch JSON data from Reddit"""
+    async def fetch_json(self, url: str, params: dict = None, retries: int = 3) -> Optional[dict]:
+        """Fetch JSON data from Reddit with retry logic"""
         await self.rate_limit()
         
-        async with httpx.AsyncClient(headers=self.headers, timeout=30.0) as client:
-            try:
-                response = await client.get(url, params=params)
-                response.raise_for_status()
-                return response.json()
-            except Exception as e:
-                self.logger.error(f"Error fetching {url}: {e}")
-                return None
+        backoff = 2.0
+        
+        for i in range(retries + 1):
+            async with httpx.AsyncClient(headers=self.headers, timeout=30.0) as client:
+                try:
+                    response = await client.get(url, params=params)
+                    
+                    if response.status_code == 429:
+                        if i < retries:
+                            wait_time = backoff * (2 ** i)
+                            self.logger.warning(f"Rate limited (429). Waiting {wait_time}s before retry {i+1}/{retries}...")
+                            await self.update_callback(f"Rate limited. Waiting {wait_time}s...", "warning")
+                            await asyncio.sleep(wait_time)
+                            continue
+                        else:
+                            self.logger.error(f"Max retries reached for {url}")
+                            return None
+                            
+                    response.raise_for_status()
+                    return response.json()
+                    
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == 429:
+                        # Should be handled above, but just in case raise_for_status catches it first
+                        if i < retries:
+                            wait_time = backoff * (2 ** i)
+                            self.logger.warning(f"Rate limited (429). Waiting {wait_time}s before retry {i+1}/{retries}...")
+                            await asyncio.sleep(wait_time)
+                            continue
+                    self.logger.error(f"HTTP error fetching {url}: {e}")
+                    return None
+                except Exception as e:
+                    self.logger.error(f"Error fetching {url}: {e}")
+                    if i < retries:
+                        await asyncio.sleep(1)
+                        continue
+                    return None
+        return None
 
     async def run(self):
         try:
